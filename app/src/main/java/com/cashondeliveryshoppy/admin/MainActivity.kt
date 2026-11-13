@@ -109,18 +109,27 @@ fun CODAdminApp(auth: FirebaseAuth, db: FirebaseFirestore) {
     val signInLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == android.app.Activity.RESULT_OK) {
-            try {
-                val account = GoogleSignIn.getSignedInAccountFromIntent(result.data)
-                    .getResult(com.google.android.gms.common.api.ApiException::class.java)
-                val credential = GoogleAuthProvider.getCredential(account.idToken, null)
+        try {
+            val account = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+                .getResult(com.google.android.gms.common.api.ApiException::class.java)
+
+            val token = account.idToken
+            if (token.isNullOrBlank()) {
+                message = "Google ID Token is missing. Check Web Client ID."
+            } else {
+                val credential = GoogleAuthProvider.getCredential(token, null)
                 auth.signInWithCredential(credential)
-                    .addOnFailureListener { message = it.localizedMessage ?: "Firebase login failed" }
-            } catch (e: Exception) {
-                message = e.localizedMessage ?: "Google sign-in failed"
+                    .addOnSuccessListener {
+                        message = "Google login successful!"
+                    }
+                    .addOnFailureListener {
+                        message = "Firebase Error: ${it.localizedMessage}"
+                    }
             }
-        } else {
-            message = "Google sign-in was cancelled. Please try again."
+        } catch (e: com.google.android.gms.common.api.ApiException) {
+            message = "Google Error Code: ${e.statusCode} - ${e.statusMessage}"
+        } catch (e: Exception) {
+            message = "Login Error: ${e.localizedMessage}"
         }
     }
 
