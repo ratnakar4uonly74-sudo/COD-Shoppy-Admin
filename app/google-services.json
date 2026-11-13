@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "439342554248-53q8m81950omje10omaeabnmavh6564e.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.cashondeliveryshoppy.admin",
+            "certificate_hash": "81930bc6c1f763f7d7de8838a5aefe41bad4c52c"
+          }
+        },
+        {
           "client_id": "439342554248-f15b8fj4k7qso7kapv421aglp3n2bi6u.apps.googleusercontent.com",
           "client_type": 3
         }
