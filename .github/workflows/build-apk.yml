@@ -53,7 +53,13 @@ jobs:
 
       - name: Verify Google Web Client ID
         run: |
-          grep -A 2 "default_web_client_id" app/build/generated/res/google-services/debug/values/values.xml
+          MATCH=$(grep -R -n -A 2 --include='*.xml' 'default_web_client_id' app/build 2>/dev/null || true)
+          if [ -z "$MATCH" ]; then
+            echo "ERROR: default_web_client_id not found"
+            find app/build -type f -name values.xml -print
+            exit 1
+          fi
+          echo "$MATCH"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
