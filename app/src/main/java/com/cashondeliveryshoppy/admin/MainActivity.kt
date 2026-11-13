@@ -260,7 +260,7 @@ fun LoginScreen(modifier: Modifier = Modifier, onLogin: () -> Unit, message: Str
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OrdersScreen(
+fun ProductsScreen(
     modifier: Modifier, products: List<Product>, message: String,
     onAdd: (String, Double, String, String) -> Unit,
     onToggle: (Product) -> Unit, onDelete: (Product) -> Unit, busy: Boolean
@@ -333,6 +333,7 @@ fun OrdersScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OrdersScreen(
     modifier: Modifier, orders: List<Order>, message: String,
