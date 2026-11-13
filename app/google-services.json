@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "439342554248",
+    "project_id": "cashondeliveryshoppy-14861",
+    "storage_bucket": "cashondeliveryshoppy-14861.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:439342554248:android:7d01bd3afaaecd3a82d33d",
+        "android_client_info": {
+          "package_name": "com.cashondeliveryshoppy.admin"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "439342554248-4s58evuhubtdlr3tt4p4t7p17qn7ae14.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.cashondeliveryshoppy.admin",
+            "certificate_hash": "3a9b997d544f9f1ca7f0e73ff6e7313953ca8e5d"
+          }
+        },
+        {
+          "client_id": "439342554248-f15b8fj4k7qso7kapv421aglp3n2bi6u.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCK2pU8e0W7DxLeTDcidA_spwrtbMTgPaY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "439342554248-f15b8fj4k7qso7kapv421aglp3n2bi6u.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
