@@ -1,4 +1,3 @@
-
 name: Build COD Shoppy Admin APK
 
 on:
@@ -51,7 +50,7 @@ jobs:
       - name: Build APK
         run: gradle assembleDebug
 
-            - name: Print APK signing SHA-1
+      - name: Print APK signing SHA-1
         run: |
           AS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner
           "$AS" verify --print-certs app/build/outputs/apk/debug/app-debug.apk | grep -i "SHA-1"
