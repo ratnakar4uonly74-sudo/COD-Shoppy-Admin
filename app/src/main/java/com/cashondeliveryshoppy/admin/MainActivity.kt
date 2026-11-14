@@ -40,7 +40,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
@@ -60,6 +62,9 @@ import java.util.Date
 import java.util.Locale
 
 private const val ADMIN_EMAIL = "cashondeliveryshoppy@gmail.com"
+
+// Two blank lines on top for your own description, then the fixed "Link in Bio" lines.
+private const val DEFAULT_DESCRIPTION = "\n\nLink in Bio\nhttps://cashondeliveryshoppy.netlify.app/"
 
 class MainActivity : ComponentActivity() {
     private val auth by lazy { FirebaseAuth.getInstance() }
@@ -312,7 +317,9 @@ fun ProductsScreen(
 ) {
     var name by remember { mutableStateOf("") }
     var price by remember { mutableStateOf("") }
-    var description by remember { mutableStateOf("") }
+    // New products start with the "Link in Bio" lines already in the box; the cursor sits at the top.
+    var descField by remember { mutableStateOf(TextFieldValue(DEFAULT_DESCRIPTION, TextRange(0))) }
+    val description = descField.text
     var editing by remember { mutableStateOf<Product?>(null) }
     val maxPhotos = 5
     val minPhotos = if (editing != null) 1 else 3
@@ -327,7 +334,8 @@ fun ProductsScreen(
     val scope = rememberCoroutineScope()
 
     fun resetForm() {
-        name = ""; price = ""; description = ""; photos = emptyList(); localMsg = ""; editing = null
+        name = ""; price = ""; descField = TextFieldValue(DEFAULT_DESCRIPTION, TextRange(0))
+        photos = emptyList(); localMsg = ""; editing = null
         refSize = null; pending = emptyList()
     }
 
@@ -335,7 +343,7 @@ fun ProductsScreen(
         editing = p
         name = p.name
         price = if (p.price % 1.0 == 0.0) p.price.toLong().toString() else p.price.toString()
-        description = p.description
+        descField = TextFieldValue(p.description)
         photos = p.images.mapNotNull { url -> dataUrlToBitmap(url)?.let { url to it } }
         refSize = photos.firstOrNull()?.second?.let { it.width to it.height }
         localMsg = if (photos.size < p.images.size)
@@ -405,8 +413,8 @@ fun ProductsScreen(
                     OutlinedTextField(name, { name = it }, label = { Text("Product name *") }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(price, { price = it }, label = { Text("Price (₹) *") },
                         modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(description, { description = it }, label = { Text("Description") },
-                        modifier = Modifier.fillMaxWidth(), minLines = 2)
+                    OutlinedTextField(descField, { descField = it }, label = { Text("Description") },
+                        modifier = Modifier.fillMaxWidth(), minLines = 4)
                     Text(
                         refSize?.let { "Photo size locked: ${it.first} × ${it.second}px. Every new photo is cropped to this size. Remove all photos to choose a new size." }
                             ?: "Crop your first photo to any size you want. All other photos will be cropped to that same size.",
@@ -656,7 +664,9 @@ private fun shareToInstagram(context: Context, p: Product) {
         p.images.forEachIndexed { i, url ->
             if (url.startsWith("data:image")) {
                 val file = java.io.File(dir, "product_${i + 1}.jpg")
-                file.writeBytes(Base64.decode(url.substringAfter("base64,"), Base64.DEFAULT))
+                val raw = Base64.decode(url.substringAfter("base64,"), Base64.DEFAULT)
+                // Only the main photo gets the price badge, and only in the shared copy.
+                file.writeBytes(if (i == 0) stampPrice(raw, p) else raw)
                 uris.add(FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file))
             }
         }
@@ -687,6 +697,50 @@ private fun shareToInstagram(context: Context, p: Product) {
         }
     } catch (e: Exception) {
         Toast.makeText(context, "Could not share: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+    }
+}
+
+// Draws a price badge in the bottom-right corner of a photo (used only for the copy shared to Instagram).
+private fun stampPrice(jpeg: ByteArray, p: Product): ByteArray {
+    return try {
+        val src = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return jpeg
+        val bmp = src.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = android.graphics.Canvas(bmp)
+        val priceText = if (p.price % 1.0 == 0.0) p.price.toLong().toString() else "%.2f".format(p.price)
+        val label = "₹$priceText"
+
+        val textPx = bmp.width * 0.07f
+        val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFFFFFFF.toInt()
+            textSize = textPx
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+        val padX = textPx * 0.7f
+        val padY = textPx * 0.45f
+        val fm = textPaint.fontMetrics
+        val w = textPaint.measureText(label) + padX * 2
+        val h = (fm.descent - fm.ascent) + padY * 2
+        val margin = bmp.width * 0.04f
+        val rect = android.graphics.RectF(
+            bmp.width - margin - w, bmp.height - margin - h, bmp.width - margin, bmp.height - margin
+        )
+        val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xE617152B.toInt()
+        }
+        val border = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFF5C36A.toInt()
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = textPx * 0.06f
+        }
+        canvas.drawRoundRect(rect, h / 2, h / 2, fill)
+        canvas.drawRoundRect(rect, h / 2, h / 2, border)
+        canvas.drawText(label, rect.left + padX, rect.top + padY - fm.ascent, textPaint)
+
+        val out = ByteArrayOutputStream()
+        bmp.compress(Bitmap.CompressFormat.JPEG, 92, out)
+        out.toByteArray()
+    } catch (e: Exception) {
+        jpeg
     }
 }
 
