@@ -40,5 +40,9 @@ dependencies {
     implementation("com.google.firebase:firebase-firestore")
 
     implementation("com.google.android.gms:play-services-auth:21.3.0")
+
+    // Crop screen for product photos
+    implementation("com.vanniktech:android-image-cropper:4.5.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
