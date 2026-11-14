@@ -15,6 +15,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -39,6 +40,11 @@ import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import com.canhub.cropper.CropImageContract
+import com.canhub.cropper.CropImageContractOptions
+import com.canhub.cropper.CropImageOptions
+import com.canhub.cropper.CropImageView
+import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -58,7 +64,7 @@ class MainActivity : ComponentActivity() {
 
 data class Product(
     val id: String, val name: String, val price: Double,
-    val description: String, val image: String, val active: Boolean
+    val description: String, val image: String, val images: List<String>, val active: Boolean
 )
 data class Order(
     val id: String, val productName: String, val qty: Long, val total: Double,
@@ -84,8 +90,12 @@ fun CODAdminApp(auth: FirebaseAuth, db: FirebaseFirestore) {
         db.collection("products").orderBy("createdAt", Query.Direction.DESCENDING).get()
             .addOnSuccessListener { snap ->
                 products = snap.documents.map { d ->
+                    val main = d.getString("image") ?: ""
+                    @Suppress("UNCHECKED_CAST")
+                    val list = (d.get("images") as? List<*>)?.filterIsInstance<String>()
+                        ?.takeIf { it.isNotEmpty() } ?: if (main.isNotBlank()) listOf(main) else emptyList()
                     Product(d.id, d.getString("name") ?: "", d.getDouble("price") ?: 0.0,
-                        d.getString("description") ?: "", d.getString("image") ?: "",
+                        d.getString("description") ?: "", main, list,
                         d.getBoolean("active") ?: true)
                 }
             }.addOnFailureListener { message = it.localizedMessage ?: "Products load failed" }
@@ -208,6 +218,18 @@ fun CODAdminApp(auth: FirebaseAuth, db: FirebaseFirestore) {
                             message = it.localizedMessage ?: "Upload failed"; busy = false
                         }
                     },
+                    onUpdate = { id, name, price, desc, images ->
+                        busy = true
+                        db.collection("products").document(id).update(mapOf(
+                            "name" to name, "price" to price, "description" to desc,
+                            "image" to images[0], "images" to images
+                        )).addOnSuccessListener {
+                            message = "Product updated! Changes are live on the customer website."
+                            loadProducts(); busy = false
+                        }.addOnFailureListener {
+                            message = it.localizedMessage ?: "Update failed"; busy = false
+                        }
+                    },
                     onToggle = { p ->
                         db.collection("products").document(p.id).update("active", !p.active)
                             .addOnSuccessListener { loadProducts() }
@@ -274,48 +296,115 @@ fun LoginScreen(modifier: Modifier = Modifier, onLogin: () -> Unit, message: Str
 fun ProductsScreen(
     modifier: Modifier, products: List<Product>, message: String,
     onAdd: (String, Double, String, List<String>) -> Unit,
+    onUpdate: (String, String, Double, String, List<String>) -> Unit,
     onToggle: (Product) -> Unit, onDelete: (Product) -> Unit, busy: Boolean
 ) {
     var name by remember { mutableStateOf("") }
     var price by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
+    var editing by remember { mutableStateOf<Product?>(null) }
     val maxPhotos = 5
-    val minPhotos = 3
+    val minPhotos = if (editing != null) 1 else 3
     var photos by remember { mutableStateOf<List<Pair<String, Bitmap>>>(emptyList()) }
     var localMsg by remember { mutableStateOf("") }
+    // Size (w, h) of the first cropped photo; every other photo is cropped to this same size.
+    var refSize by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var pending by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var cropping by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    fun resetForm() {
+        name = ""; price = ""; description = ""; photos = emptyList(); localMsg = ""; editing = null
+        refSize = null; pending = emptyList()
+    }
+
+    fun startEdit(p: Product) {
+        editing = p
+        name = p.name
+        price = if (p.price % 1.0 == 0.0) p.price.toLong().toString() else p.price.toString()
+        description = p.description
+        photos = p.images.mapNotNull { url -> dataUrlToBitmap(url)?.let { url to it } }
+        refSize = photos.firstOrNull()?.second?.let { it.width to it.height }
+        localMsg = if (photos.size < p.images.size)
+            "Some old photos couldn't be loaded; add them again if needed." else ""
+        scope.launch { listState.animateScrollToItem(0) }
+    }
+
+    // Result of the crop screen for one photo.
+    val cropLauncher = rememberLauncherForActivityResult(CropImageContract()) { result ->
+        val croppedUri = result.uriContent
+        if (result.isSuccessful && croppedUri != null) {
+            try {
+                var bitmap = decodeAndResize(context, croppedUri)
+                val ref = refSize
+                if (ref == null) {
+                    // First photo: the size the user chose becomes the size for all photos.
+                    refSize = bitmap.width to bitmap.height
+                } else if (bitmap.width != ref.first || bitmap.height != ref.second) {
+                    bitmap = Bitmap.createScaledBitmap(bitmap, ref.first, ref.second, true)
+                }
+                val output = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 65, output)
+                val data = "data:image/jpeg;base64," + Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
+                photos = photos + (data to bitmap)
+            } catch (e: Exception) {
+                localMsg = "Could not process one of the photos."
+            }
+        }
+        pending = pending.drop(1)
+        cropping = false
+    }
+
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
             val room = maxPhotos - photos.size
-            val added = mutableListOf<Pair<String, Bitmap>>()
-            for (uri in uris.take(room)) {
-                try {
-                    val bitmap = decodeAndResize(context, uri)
-                    val output = ByteArrayOutputStream()
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 65, output)
-                    val data = "data:image/jpeg;base64," + Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
-                    added.add(data to bitmap)
-                } catch (e: Exception) { }
-            }
-            photos = photos + added
+            pending = uris.take(room)
             localMsg = if (uris.size > room) "Maximum $maxPhotos photos allowed. Extra photos were skipped." else ""
         }
     }
 
-    LazyColumn(modifier.fillMaxSize().padding(horizontal = 16.dp), contentPadding = PaddingValues(vertical = 16.dp),
+    // Opens the crop screen for each picked photo, one after another.
+    LaunchedEffect(pending, cropping) {
+        val next = pending.firstOrNull()
+        if (next != null && !cropping) {
+            cropping = true
+            val ref = refSize
+            val options = if (ref == null) {
+                CropImageOptions(guidelines = CropImageView.Guidelines.ON)
+            } else {
+                CropImageOptions(
+                    guidelines = CropImageView.Guidelines.ON,
+                    fixAspectRatio = true, aspectRatioX = ref.first, aspectRatioY = ref.second
+                )
+            }
+            cropLauncher.launch(CropImageContractOptions(next, options))
+        }
+    }
+
+    LazyColumn(modifier.fillMaxSize().padding(horizontal = 16.dp), state = listState,
+        contentPadding = PaddingValues(vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             ElevatedCard(shape = RoundedCornerShape(18.dp)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Add new product", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(if (editing != null) "Edit product" else "Add new product",
+                        style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                     OutlinedTextField(name, { name = it }, label = { Text("Product name *") }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(price, { price = it }, label = { Text("Price (₹) *") },
                         modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(description, { description = it }, label = { Text("Description") },
                         modifier = Modifier.fillMaxWidth(), minLines = 2)
+                    Text(
+                        refSize?.let { "Photo size locked: ${it.first} × ${it.second}px. Every new photo is cropped to this size. Remove all photos to choose a new size." }
+                            ?: "Crop your first photo to any size you want. All other photos will be cropped to that same size.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     OutlinedButton(
                         onClick = { picker.launch("image/*") },
-                        enabled = photos.size < maxPhotos,
+                        enabled = photos.size < maxPhotos && pending.isEmpty(),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(Icons.Default.AddPhotoAlternate, null); Spacer(Modifier.width(8.dp))
@@ -331,7 +420,10 @@ fun ProductsScreen(
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Image(pair.second.asImageBitmap(), null, Modifier.size(96.dp))
                                     Text(if (i == 0) "Main" else "Photo ${i + 1}", style = MaterialTheme.typography.bodySmall)
-                                    TextButton(onClick = { photos = photos.filterIndexed { idx, _ -> idx != i } }) {
+                                    TextButton(onClick = {
+                                        photos = photos.filterIndexed { idx, _ -> idx != i }
+                                        if (photos.isEmpty()) refSize = null
+                                    }) {
                                         Text("Remove", color = MaterialTheme.colorScheme.error)
                                     }
                                 }
@@ -346,11 +438,29 @@ fun ProductsScreen(
                             if (images.sumOf { it.length } > 800000) {
                                 localMsg = "Photos are too large together. Please remove one or use smaller photos."
                             } else {
-                                onAdd(name.trim(), price.toDouble(), description.trim(), images)
-                                name = ""; price = ""; description = ""; photos = emptyList(); localMsg = ""
+                                val current = editing
+                                if (current != null) {
+                                    onUpdate(current.id, name.trim(), price.toDouble(), description.trim(), images)
+                                } else {
+                                    onAdd(name.trim(), price.toDouble(), description.trim(), images)
+                                }
+                                resetForm()
                             }
                         }, modifier = Modifier.fillMaxWidth()
-                    ) { Text(if (busy) "Uploading…" else "UPLOAD PRODUCT") }
+                    ) {
+                        Text(
+                            when {
+                                busy -> if (editing != null) "Updating…" else "Uploading…"
+                                editing != null -> "UPDATE PRODUCT"
+                                else -> "UPLOAD PRODUCT"
+                            }
+                        )
+                    }
+                    if (editing != null) {
+                        OutlinedButton(onClick = { resetForm() }, modifier = Modifier.fillMaxWidth()) {
+                            Text("CANCEL EDIT")
+                        }
+                    }
                     if (message.isNotBlank()) Text(message, color = MaterialTheme.colorScheme.primary)
                 }
             }
@@ -367,6 +477,7 @@ fun ProductsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text(if (p.active) "Visible on website" else "Hidden")
                     Row {
+                        TextButton(onClick = { startEdit(p) }) { Text("Edit") }
                         TextButton(onClick = { onToggle(p) }) { Text(if (p.active) "Hide" else "Show") }
                         TextButton(onClick = { onDelete(p) }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                     }
@@ -421,6 +532,16 @@ fun OrdersScreen(
             }
         }
     }
+}
+
+private fun dataUrlToBitmap(url: String): Bitmap? = try {
+    if (!url.startsWith("data:image")) null
+    else {
+        val bytes = Base64.decode(url.substringAfter("base64,"), Base64.DEFAULT)
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    }
+} catch (e: Exception) {
+    null
 }
 
 private fun decodeAndResize(context: Context, uri: Uri): Bitmap {
