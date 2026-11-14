@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,6 +30,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -246,7 +248,9 @@ fun CODAdminApp(auth: FirebaseAuth, db: FirebaseFirestore) {
                 OrdersScreen(
                     modifier = Modifier.padding(padding), orders = orders, message = message,
                     onStatus = { order, status ->
-                        db.collection("orders").document(order.id).update("status", status)
+                        val changes = hashMapOf<String, Any>("status" to status)
+                        if (status == "delivered") changes["deliveredAt"] = FieldValue.serverTimestamp()
+                        db.collection("orders").document(order.id).update(changes)
                             .addOnSuccessListener { message = "Order status updated."; loadOrders() }
                             .addOnFailureListener { message = it.localizedMessage ?: "Update failed" }
                     },
@@ -487,45 +491,116 @@ fun ProductsScreen(
     }
 }
 
+private fun statusColor(status: String): Color = when (status) {
+    "new" -> Color(0xFF1E88E5)
+    "confirmed" -> Color(0xFF8E24AA)
+    "shipped" -> Color(0xFF00897B)
+    "out_for_delivery" -> Color(0xFFEF6C00)
+    "delivered" -> Color(0xFF2E7D32)
+    "cancelled" -> Color(0xFFC62828)
+    else -> Color(0xFF616161)
+}
+
+private fun statusLabel(status: String): String =
+    status.replace("_", " ").replaceFirstChar { it.uppercase() }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OrdersScreen(
     modifier: Modifier, orders: List<Order>, message: String,
     onStatus: (Order, String) -> Unit, onShip: (Order, String, String) -> Unit
 ) {
-    LazyColumn(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    var filter by remember { mutableStateOf("all") }
+    var openId by remember { mutableStateOf<String?>(null) }
+    val filters = listOf("all", "new", "confirmed", "shipped", "out_for_delivery", "delivered", "cancelled")
+    val shown = if (filter == "all") orders else orders.filter { it.status == filter }
+
+    LazyColumn(modifier.fillMaxSize().padding(horizontal = 16.dp), contentPadding = PaddingValues(vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (message.isNotBlank()) item { Text(message, color = MaterialTheme.colorScheme.primary) }
-        if (orders.isEmpty()) item { Text("No orders yet.") }
-        items(orders, key = { it.id }) { o ->
+        item {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                filters.forEach { f ->
+                    val count = if (f == "all") orders.size else orders.count { it.status == f }
+                    FilterChip(
+                        selected = filter == f,
+                        onClick = { filter = f },
+                        label = { Text(if (f == "all") "All ($count)" else "${statusLabel(f)} ($count)") }
+                    )
+                }
+            }
+        }
+        if (shown.isEmpty()) item { Text("No orders here.") }
+        items(shown, key = { it.id }) { o ->
+            val open = openId == o.id
             var company by remember(o.id) { mutableStateOf(o.shippingCompany) }
             var tracking by remember(o.id) { mutableStateOf(o.shippingId) }
-            var status by remember(o.id) { mutableStateOf(o.status) }
-            ElevatedCard {
+            var expanded by remember(o.id) { mutableStateOf(false) }
+            ElevatedCard(Modifier.fillMaxWidth().clickable { openId = if (open) null else o.id }) {
                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(o.productName + " × " + o.qty, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("COD Total: ₹${o.total}")
-                    Text("${o.name}  •  ${o.phone}")
-                    Text("${o.address}, ${o.city}, ${o.state} - ${o.pincode}")
-                    if (o.email.isNotBlank()) Text(o.email, style = MaterialTheme.typography.bodySmall)
-                    if (o.instructions.isNotBlank()) Text("Instructions: ${o.instructions}")
-                    o.createdAt?.let { Text(SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(it)) }
-                    Text("Order ID: ${o.id}", style = MaterialTheme.typography.bodySmall)
-                    OutlinedTextField(company, { company = it }, label = { Text("Courier company") }, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(tracking, { tracking = it }, label = { Text("Tracking ID") }, modifier = Modifier.fillMaxWidth())
-                    Button(onClick = { onShip(o, company, tracking) }, modifier = Modifier.fillMaxWidth()) {
-                        Text("SAVE & MARK SHIPPED")
-                    }
-                    var expanded by remember { mutableStateOf(false) }
-                    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
-                        OutlinedTextField(status.replace("_", " "), {}, readOnly = true,
-                            label = { Text("Order status") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-                            modifier = Modifier.menuAnchor().fillMaxWidth())
-                        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                            listOf("new", "confirmed", "out_for_delivery", "delivered", "cancelled").forEach { s ->
-                                DropdownMenuItem(text = { Text(s.replace("_", " ")) }, onClick = {
-                                    status = s; expanded = false; onStatus(o, s)
-                                })
+                    // Short summary, always visible. Tap the card (or the Order ID) to open details.
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Order #${o.id.take(6).uppercase()}",
+                                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text(o.productName + " × " + o.qty)
+                            Text("${o.name}  •  ${o.city}", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Surface(shape = RoundedCornerShape(50), color = statusColor(o.status).copy(alpha = 0.15f)) {
+                                Text(statusLabel(o.status), color = statusColor(o.status),
+                                    style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
                             }
+                            Spacer(Modifier.height(4.dp))
+                            Text("₹" + "%.2f".format(o.total), fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                    o.createdAt?.let {
+                        Text(SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(it),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+
+                    if (open) {
+                        HorizontalDivider()
+                        Text("Order ID: ${o.id}", style = MaterialTheme.typography.bodySmall)
+                        Text("Customer", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                        Text("${o.name}  •  ${o.phone}")
+                        Text("${o.address}, ${o.city}, ${o.state} - ${o.pincode}")
+                        if (o.email.isNotBlank()) Text(o.email, style = MaterialTheme.typography.bodySmall)
+                        if (o.instructions.isNotBlank()) Text("Instructions: ${o.instructions}")
+                        Text("COD Total: ₹${o.total}", fontWeight = FontWeight.SemiBold)
+                        HorizontalDivider()
+                        Text("Shipping", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                        OutlinedTextField(company, { company = it }, label = { Text("Courier company") }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(tracking, { tracking = it }, label = { Text("Tracking ID") }, modifier = Modifier.fillMaxWidth())
+                        Button(onClick = { onShip(o, company, tracking) }, modifier = Modifier.fillMaxWidth()) {
+                            Text("SAVE & MARK SHIPPED")
+                        }
+                        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
+                            OutlinedTextField(statusLabel(o.status), {}, readOnly = true,
+                                label = { Text("Order status") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                                modifier = Modifier.menuAnchor().fillMaxWidth())
+                            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                                listOf("new", "confirmed", "shipped", "out_for_delivery", "delivered", "cancelled").forEach { s ->
+                                    DropdownMenuItem(text = { Text(statusLabel(s)) }, onClick = {
+                                        expanded = false
+                                        if (s == "shipped") onShip(o, company, tracking) else onStatus(o, s)
+                                    })
+                                }
+                            }
+                        }
+                        if (o.status != "delivered") {
+                            Button(
+                                onClick = { onStatus(o, "delivered") },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("MARK AS DELIVERED") }
+                        } else {
+                            Text("✓ Delivered — customer sees this order as complete.",
+                                color = Color(0xFF2E7D32), fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
