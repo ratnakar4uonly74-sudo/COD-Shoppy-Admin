@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -194,11 +195,12 @@ fun CODAdminApp(auth: FirebaseAuth, db: FirebaseFirestore) {
             } else if (tab == 0) {
                 ProductsScreen(
                     modifier = Modifier.padding(padding), products = products, message = message,
-                    onAdd = { name, price, desc, image ->
+                    onAdd = { name, price, desc, images ->
                         busy = true
                         db.collection("products").add(hashMapOf(
                             "name" to name, "price" to price, "description" to desc,
-                            "image" to image, "active" to true, "createdAt" to FieldValue.serverTimestamp()
+                            "image" to images[0], "images" to images,
+                            "active" to true, "createdAt" to FieldValue.serverTimestamp()
                         )).addOnSuccessListener {
                             message = "Product uploaded! It will appear on the customer website."
                             loadProducts(); busy = false
@@ -271,24 +273,32 @@ fun LoginScreen(modifier: Modifier = Modifier, onLogin: () -> Unit, message: Str
 @Composable
 fun ProductsScreen(
     modifier: Modifier, products: List<Product>, message: String,
-    onAdd: (String, Double, String, String) -> Unit,
+    onAdd: (String, Double, String, List<String>) -> Unit,
     onToggle: (Product) -> Unit, onDelete: (Product) -> Unit, busy: Boolean
 ) {
     var name by remember { mutableStateOf("") }
     var price by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
-    var imageData by remember { mutableStateOf("") }
-    var imageBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    val maxPhotos = 5
+    val minPhotos = 3
+    var photos by remember { mutableStateOf<List<Pair<String, Bitmap>>>(emptyList()) }
+    var localMsg by remember { mutableStateOf("") }
     val context = LocalContext.current
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        if (uri != null) {
-            try {
-                val bitmap = decodeAndResize(context, uri)
-                val output = ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 72, output)
-                imageData = "data:image/jpeg;base64," + Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
-                imageBitmap = bitmap
-            } catch (e: Exception) { imageData = ""; imageBitmap = null }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            val room = maxPhotos - photos.size
+            val added = mutableListOf<Pair<String, Bitmap>>()
+            for (uri in uris.take(room)) {
+                try {
+                    val bitmap = decodeAndResize(context, uri)
+                    val output = ByteArrayOutputStream()
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 65, output)
+                    val data = "data:image/jpeg;base64," + Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
+                    added.add(data to bitmap)
+                } catch (e: Exception) { }
+            }
+            photos = photos + added
+            localMsg = if (uris.size > room) "Maximum $maxPhotos photos allowed. Extra photos were skipped." else ""
         }
     }
 
@@ -303,18 +313,42 @@ fun ProductsScreen(
                         modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(description, { description = it }, label = { Text("Description") },
                         modifier = Modifier.fillMaxWidth(), minLines = 2)
-                    OutlinedButton(onClick = { picker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = { picker.launch("image/*") },
+                        enabled = photos.size < maxPhotos,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Icon(Icons.Default.AddPhotoAlternate, null); Spacer(Modifier.width(8.dp))
-                        Text(if (imageData.isBlank()) "Choose photo from Gallery" else "Change photo")
+                        Text("Choose photos from Gallery (min $minPhotos, max $maxPhotos)")
                     }
-                    imageBitmap?.let {
-                        Image(it.asImageBitmap(), null, Modifier.fillMaxWidth().heightIn(max = 190.dp))
+                    Text(
+                        "${photos.size} / $maxPhotos photos added",
+                        color = if (photos.size >= minPhotos) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (photos.isNotEmpty()) {
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            photos.forEachIndexed { i, pair ->
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Image(pair.second.asImageBitmap(), null, Modifier.size(96.dp))
+                                    Text(if (i == 0) "Main" else "Photo ${i + 1}", style = MaterialTheme.typography.bodySmall)
+                                    TextButton(onClick = { photos = photos.filterIndexed { idx, _ -> idx != i } }) {
+                                        Text("Remove", color = MaterialTheme.colorScheme.error)
+                                    }
+                                }
+                            }
+                        }
                     }
+                    if (localMsg.isNotBlank()) Text(localMsg, color = MaterialTheme.colorScheme.error)
                     Button(
-                        enabled = !busy && name.isNotBlank() && (price.toDoubleOrNull() ?: 0.0) > 0 && imageData.isNotBlank(),
+                        enabled = !busy && name.isNotBlank() && (price.toDoubleOrNull() ?: 0.0) > 0 && photos.size >= minPhotos,
                         onClick = {
-                            onAdd(name.trim(), price.toDouble(), description.trim(), imageData)
-                            name = ""; price = ""; description = ""; imageData = ""; imageBitmap = null
+                            val images = photos.map { it.first }
+                            if (images.sumOf { it.length } > 800000) {
+                                localMsg = "Photos are too large together. Please remove one or use smaller photos."
+                            } else {
+                                onAdd(name.trim(), price.toDouble(), description.trim(), images)
+                                name = ""; price = ""; description = ""; photos = emptyList(); localMsg = ""
+                            }
                         }, modifier = Modifier.fillMaxWidth()
                     ) { Text(if (busy) "Uploading…" else "UPLOAD PRODUCT") }
                     if (message.isNotBlank()) Text(message, color = MaterialTheme.colorScheme.primary)
@@ -398,6 +432,6 @@ private fun decodeAndResize(context: Context, uri: Uri): Bitmap {
     val sample = Integer.highestOneBit((maxSide / 1000).coerceAtLeast(1))
     val opts = BitmapFactory.Options().apply { inSampleSize = sample }
     val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: error("Invalid image")
-    val scale = minOf(1f, 800f / maxOf(bitmap.width, bitmap.height))
+    val scale = minOf(1f, 720f / maxOf(bitmap.width, bitmap.height))
     return if (scale < 1f) Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt(), (bitmap.height * scale).toInt(), true) else bitmap
 }
