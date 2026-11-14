@@ -709,7 +709,7 @@ private fun stampPrice(jpeg: ByteArray, p: Product): ByteArray {
         val priceText = if (p.price % 1.0 == 0.0) p.price.toLong().toString() else "%.2f".format(p.price)
         val label = "₹$priceText"
 
-        val textPx = bmp.width * 0.07f
+        val textPx = bmp.width * 0.032f
         val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xFFFFFFFF.toInt()
             textSize = textPx
@@ -720,10 +720,10 @@ private fun stampPrice(jpeg: ByteArray, p: Product): ByteArray {
         val fm = textPaint.fontMetrics
         val w = textPaint.measureText(label) + padX * 2
         val h = (fm.descent - fm.ascent) + padY * 2
-        val margin = bmp.width * 0.04f
-        val rect = android.graphics.RectF(
-            bmp.width - margin - w, bmp.height - margin - h, bmp.width - margin, bmp.height - margin
-        )
+        // Right edge, vertically centred.
+        val margin = bmp.width * 0.03f
+        val top = (bmp.height - h) / 2f
+        val rect = android.graphics.RectF(bmp.width - margin - w, top, bmp.width - margin, top + h)
         val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xE617152B.toInt()
         }
