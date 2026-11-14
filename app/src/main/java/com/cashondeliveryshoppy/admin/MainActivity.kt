@@ -1,6 +1,12 @@
 package com.cashondeliveryshoppy.admin
 
+import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.widget.Toast
+import androidx.core.content.FileProvider
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -486,6 +492,10 @@ fun ProductsScreen(
                         TextButton(onClick = { onDelete(p) }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                     }
                 }
+                OutlinedButton(
+                    onClick = { shareToInstagram(context, p) },
+                    modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 10.dp)
+                ) { Text("📸 Share to Instagram") }
             }
         }
     }
@@ -606,6 +616,67 @@ fun OrdersScreen(
                 }
             }
         }
+    }
+}
+
+// Put your website address here (the page that opens products), e.g. "https://your-shop.web.app/"
+// Leave it empty to skip the order link in the caption.
+private const val SHOP_URL = ""
+
+private fun buildCaption(p: Product): String {
+    val price = if (p.price % 1.0 == 0.0) p.price.toLong().toString() else "%.2f".format(p.price)
+    val sb = StringBuilder()
+    sb.append("✨ ${p.name}\n")
+    sb.append("💰 Price: ₹$price\n")
+    if (p.description.isNotBlank()) sb.append("\n${p.description}\n")
+    sb.append("\n🚚 Cash on Delivery — pay when it reaches your door!")
+    if (SHOP_URL.isNotBlank()) sb.append("\n🛒 Order here: ${SHOP_URL}?p=${p.id}")
+    return sb.toString()
+}
+
+// Opens Instagram with the product photos. Instagram does not accept a ready-made caption from other
+// apps, so the caption is copied to the clipboard: long-press the caption box in Instagram and tap Paste.
+private fun shareToInstagram(context: Context, p: Product) {
+    try {
+        val dir = java.io.File(context.cacheDir, "share").apply {
+            mkdirs()
+            listFiles()?.forEach { it.delete() }
+        }
+        val uris = ArrayList<Uri>()
+        p.images.forEachIndexed { i, url ->
+            if (url.startsWith("data:image")) {
+                val file = java.io.File(dir, "product_${i + 1}.jpg")
+                file.writeBytes(Base64.decode(url.substringAfter("base64,"), Base64.DEFAULT))
+                uris.add(FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file))
+            }
+        }
+        if (uris.isEmpty()) {
+            Toast.makeText(context, "This product has no photos that can be shared.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val caption = buildCaption(p)
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Product caption", caption))
+        Toast.makeText(context, "Caption copied. In Instagram, long-press the caption box and tap Paste.",
+            Toast.LENGTH_LONG).show()
+
+        val intent = if (uris.size == 1) {
+            Intent(Intent.ACTION_SEND).apply { putExtra(Intent.EXTRA_STREAM, uris[0]) }
+        } else {
+            Intent(Intent.ACTION_SEND_MULTIPLE).apply { putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris) }
+        }
+        intent.apply {
+            type = "image/jpeg"
+            putExtra(Intent.EXTRA_TEXT, caption)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try {
+            context.startActivity(Intent(intent).setPackage("com.instagram.android"))
+        } catch (e: ActivityNotFoundException) {
+            context.startActivity(Intent.createChooser(intent, "Share product"))
+        }
+    } catch (e: Exception) {
+        Toast.makeText(context, "Could not share: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
     }
 }
 
