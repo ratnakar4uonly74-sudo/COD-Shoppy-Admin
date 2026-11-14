@@ -36,6 +36,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
@@ -79,7 +80,7 @@ data class Order(
     val name: String, val phone: String, val address: String, val city: String,
     val state: String, val pincode: String, val email: String, val status: String,
     val shippingCompany: String, val shippingId: String, val instructions: String,
-    val createdAt: Date?
+    val createdAt: Date?, val selectedImage: String = ""
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -120,7 +121,7 @@ fun CODAdminApp(auth: FirebaseAuth, db: FirebaseFirestore) {
                         d.getString("pincode") ?: "", d.getString("email") ?: "",
                         d.getString("status") ?: "new", d.getString("shippingCompany") ?: "",
                         d.getString("shippingId") ?: "", d.getString("instructions") ?: "",
-                        ts?.toDate())
+                        ts?.toDate(), selectedImage = d.getString("selectedImage") ?: "")
                 }
             }.addOnFailureListener { message = it.localizedMessage ?: "Orders load failed" }
     }
@@ -550,6 +551,12 @@ fun OrdersScreen(
                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     // Short summary, always visible. Tap the card (or the Order ID) to open details.
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        val thumb = remember(o.selectedImage) { dataUrlToBitmap(o.selectedImage) }
+                        if (thumb != null) {
+                            Image(thumb.asImageBitmap(), null,
+                                Modifier.size(72.dp).clip(RoundedCornerShape(10.dp)))
+                            Spacer(Modifier.width(10.dp))
+                        }
                         Column(Modifier.weight(1f)) {
                             Text("Order #${o.id.take(6).uppercase()}",
                                 style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -575,6 +582,9 @@ fun OrdersScreen(
 
                     if (open) {
                         HorizontalDivider()
+                        dataUrlToBitmap(o.selectedImage)?.let {
+                            Image(it.asImageBitmap(), null, Modifier.fillMaxWidth().heightIn(max = 280.dp))
+                        }
                         Text("Order ID: ${o.id}", style = MaterialTheme.typography.bodySmall)
                         Text("Customer", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                         Text("${o.name}  •  ${o.phone}")
